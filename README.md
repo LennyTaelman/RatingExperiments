@@ -84,23 +84,31 @@ This command will read `simulation_attempts.json`, perform the rating calculatio
 ## Example results
 
 This experiment is to inform choices in the [SorryDB
-project](https://github.com/SorryDB/SorryDB). Here is one run of the experiment:
+project](https://github.com/SorryDB/SorryDB). Below is one run of the experiment
+with rather sparse data (weak signal).
 
-Simulation parameters:
 
-- 20 agents
+### Simulation
+
+We used as simulation parameters:
+
+- 20 agents with downtime uniformally chosen between 0 and 0.8
 - 1000 problems ('sorries')
 - mean difficulty - mean strength = 15 (corresponding to a success rate of
   3e-07)
 - std deviation of agent strength = 2.5
 - std deviation of problem difficulty = 5
 
-Outcome:
+The outcome of the simulation consisted of
 
-- 20 problems were solved
+- 10984 attempts
+- 20 problems were solved by at least one agent
 - 13 agents solved at least one problem
 
-Maximum likelihood estimation using as prior:
+### Inference
+
+Maximum likelihood estimation excluding unsolved problems or agents with score
+0. As prior we used:
 
 - strengths and difficulties are ~ N(0,1)
 
