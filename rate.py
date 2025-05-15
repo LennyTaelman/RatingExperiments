@@ -12,7 +12,7 @@ from coordinate_newton_optimizer import coordinate_newton_optimize # Import the 
 DEFAULT_INF_PROB_DIST = {"mean": 15.0, "std": 3.0}  
 DEFAULT_INF_AGENT_DIST = {"mean": 15.0, "std": 3.0}
 
-# --- Optimization Hyperparameters for Coordinate Newton ---
+# Optimization Hyperparameters for Coordinate Newton
 NUM_OPTIMIZATION_EPOCHS = 20 # Number of full passes over all parameters
 OPTIMIZATION_LEARNING_RATE = 0.5 # Learning rate for Newton steps
 OPTIMIZATION_EPSILON = 1e-6    # Small constant for numerical stability in Newton step denominator
@@ -34,53 +34,41 @@ class NumpyFloatEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 def preprocess_attempts_to_matrix(attempts_list):
-    """Convert a list of attempt dictionaries to an outcomes matrix and determine dimensions."""
-    max_agent_num = 0
-    max_prob_num = 0
-    parsed_attempts = []
+    """
+    Convert a list of attempt dictionaries to an outcomes matrix.
+    The matrix includes only problems that were solved by at least one agent,
+    and only agents that solved at least one problem.
+    The matrix coordinates correspond to indices in the returned problem and agent lists.
+    Outcomes are 1 (solved), -1 (failed), or 0 (no_show).
+    """
+    # Identify the problems and agents that solved at least one problem
+    problems = list({
+        attempt["problem"] for attempt in attempts_list if attempt["outcome"] == "solved"
+    })
+    agents = list({
+        attempt["agent"] for attempt in attempts_list if attempt["outcome"] == "solved"
+    })
+    problem_to_idx = {name: i for i, name in enumerate(problems)}
+    agent_to_idx = {name: i for i, name in enumerate(agents)}
+    n_problems = len(problems)
+    n_agents = len(agents)
 
-    for attempt in attempts_list:
-        try:
-            agent_num = int(attempt["agent"][1:]) # Remove "A"
-            prob_num = int(attempt["problem"][1:]) # Remove "P"
-            max_agent_num = max(max_agent_num, agent_num)
-            max_prob_num = max(max_prob_num, prob_num)
-            parsed_attempts.append({"agent_idx": agent_num - 1, "prob_idx": prob_num - 1, "outcome_str": attempt["outcome"]})
-        except (ValueError, TypeError, KeyError) as e:
-            print(f"Warning: Skipping malformed attempt data: {attempt}. Error: {e}")
+    # Populate the outcome matrix
+    outcomes = np.full((n_problems, n_agents), 0, dtype=np.int8)
+    for attempt in attempts_list: 
+        problem = attempt["problem"]
+        agent = attempt["agent"]
+        if problem not in problem_to_idx or agent not in agent_to_idx:
             continue
+        row_idx = problem_to_idx[problem]
+        col_idx = agent_to_idx[agent]
+        if attempt["outcome"] == "solved":
+            outcomes[row_idx, col_idx] = 1
+        elif attempt["outcome"] == "failed":
+            outcomes[row_idx, col_idx] = -1
 
-    if not parsed_attempts:
-        raise ValueError("No valid attempts found in the input data.")
+    return outcomes, problems, agents
 
-    n_agents = max_agent_num
-    n_probs = max_prob_num
-    
-    # Initialize with 0 (no_show). int8 should be fine for -1, 0, 1.
-    outcomes_matrix = np.full((n_probs, n_agents), 0, dtype=np.int8)
-    
-    for p_attempt in parsed_attempts:
-        agent_idx, prob_idx, outcome_str = p_attempt["agent_idx"], p_attempt["prob_idx"], p_attempt["outcome_str"]
-        if 0 <= agent_idx < n_agents and 0 <= prob_idx < n_probs:
-            if outcome_str == "solved":
-                outcomes_matrix[prob_idx, agent_idx] = 1
-            elif outcome_str == "failed":
-                outcomes_matrix[prob_idx, agent_idx] = -1
-            elif outcome_str == "no_show":
-                outcomes_matrix[prob_idx, agent_idx] = 0
-        else:
-            print(f"Warning: Attempt with out-of-bounds indices skipped: agent_idx={agent_idx}, prob_idx={prob_idx}")
-            
-    return outcomes_matrix, n_probs, n_agents
-
-def prune_for_inference(outcomes_matrix):
-    """Prunes problems that were not solved by any agent."""
-    # Ensure outcomes_matrix is a JAX array for jnp.any
-    outcomes_jnp = jnp.asarray(outcomes_matrix)
-    solved_mask = jnp.any(outcomes_jnp == 1, axis=1)
-    pruned_outcomes = outcomes_jnp[solved_mask]
-    n_solved_probs = pruned_outcomes.shape[0]
-    return pruned_outcomes, solved_mask, n_solved_probs
 
 def log_likelihood(outcomes, problem_difficulties_1d, agent_strengths_1d):
     """Calculate log-likelihood of outcomes given problem difficulties and agent strengths."""
@@ -172,36 +160,29 @@ def main_rate():
         if attempt["outcome"] == "solved":
             agent_solve_counts[agent_id_str] += 1
 
-    outcomes_matrix, n_total_probs, n_total_agents = preprocess_attempts_to_matrix(attempts_list_from_file)
-    print(f"Data preprocessed: {n_total_probs} problems, {n_total_agents} agents found in input.")
+    outcomes, problems, agents = preprocess_attempts_to_matrix(attempts_list_from_file)
+    print(f"Data preprocessed: {len(problems)} problems, {len(agents)} agents found in input.")
 
-    pruned_outcomes, solved_mask, n_solved_probs_for_inference = prune_for_inference(outcomes_matrix)
-
-    if n_solved_probs_for_inference == 0:
-        print("Error: No problems were solved by any agent after pruning. Cannot perform inference.")
-        return
-    print(f"Pruning complete: {n_solved_probs_for_inference} problems remain for inference.")
-
-    print("Starting inference with custom coordinate Newton optimizer...")
+    print("Starting Newton optimization...")
     inferred_problem_diffs, inferred_agent_strengths, prob_std_errors, agent_std_errors = infer_parameters(
-        pruned_outcomes, 
-        n_solved_probs_for_inference, 
-        n_total_agents, 
+        outcomes, 
+        len(problems), 
+        len(agents), 
         DEFAULT_INF_PROB_DIST, 
         DEFAULT_INF_AGENT_DIST
     )
     print("Inference complete.")
 
     # Create a list of agent data for sorting and printing
-    all_agent_data = []
-    for agent_idx in range(n_total_agents):
-        agent_id_str = f"A{agent_idx + 1}"
-        num_solved = agent_solve_counts.get(agent_id_str, 0)
-        num_attempts = agent_attempt_counts.get(agent_id_str, 0)
+    agent_data = []
+    for agent_idx in range(len(agents)):
+        agent = agents[agent_idx]
+        num_solved = agent_solve_counts.get(agent, 0)
+        num_attempts = agent_attempt_counts.get(agent, 0)
         solved_per_attempt = (num_solved / num_attempts) if num_attempts > 0 else 0.0
         
-        all_agent_data.append({
-            "id": agent_id_str,
+        agent_data.append({
+            "id": agent,
             "strength": inferred_agent_strengths[agent_idx],
             "std_error": agent_std_errors[agent_idx],
             "num_solved": num_solved,
@@ -210,7 +191,7 @@ def main_rate():
         })
     
     # Filter agents to include only those with num_solved > 0
-    agents_with_solves = [agent for agent in all_agent_data if agent["num_solved"] > 0]
+    agents_with_solves = [agent for agent in agent_data if agent["num_solved"] > 0]
 
     # Sort filtered agents by inferred strength (descending) for printing and JSON ranking
     agents_with_solves.sort(key=lambda x: x["strength"], reverse=True)
@@ -237,22 +218,18 @@ def main_rate():
         })
 
     problem_ratings_for_json = []
-    original_solved_problem_indices = np.where(solved_mask)[0]
     # Sort problems by inferred difficulty (descending)
     problem_print_data = []
-    for solved_problem_arr_idx in range(n_solved_probs_for_inference):
-        original_prob_idx = original_solved_problem_indices[solved_problem_arr_idx]
+    for problem_idx in range(len(problems)):
+        problem = problems[problem_idx]
         
         # Find agents who solved this specific problem using the original outcomes_matrix
-        solving_agent_indices = np.where(outcomes_matrix[original_prob_idx, :] == 1)[0]
-        solving_agents_str = ", ".join([f"A{idx + 1}" for idx in solving_agent_indices])
-        if not solving_agents_str: # Should not happen for problems in this list due to prune_for_inference
-            solving_agents_str = "-" 
-
+        solving_agent_indices = np.where(outcomes[problem_idx, :] == 1)[0]
+        solving_agents_str = ", ".join(agents[idx] for idx in solving_agent_indices)
         problem_print_data.append({
-            "id": f"P{original_prob_idx + 1}",
-            "difficulty": inferred_problem_diffs[solved_problem_arr_idx],
-            "std_error": prob_std_errors[solved_problem_arr_idx],
+            "id": problem,
+            "difficulty": inferred_problem_diffs[problem_idx],
+            "std_error": prob_std_errors[problem_idx],
             "solved_by": solving_agents_str
         })
 
