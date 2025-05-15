@@ -36,7 +36,8 @@ and add an arbitrary constant.
 ### 1. Simulate Competition Data
 
 The `simulate.py` script generates synthetic data of agents attempting problems.
-The parameters are hard-coded in the file. They determine the distribution of
+The parameters are hard-coded as global constants, to change them edit the file.
+They determine the distribution of
 
 - the difficulties of the problems
 - the strengths of the agents
