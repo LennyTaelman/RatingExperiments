@@ -9,8 +9,8 @@ from collections import defaultdict
 from coordinate_newton_optimizer import coordinate_newton_optimize # Import the new optimizer
 
 # Parameters for maximum likelihood estimation in the inference phase (priors)
-DEFAULT_INF_PROB_DIST = {"mean": 15.0, "std": 3.0}  
-DEFAULT_INF_AGENT_DIST = {"mean": 15.0, "std": 3.0}
+DEFAULT_INF_PROB_DIST = {"mean": 0.0, "std": 1.0}  
+DEFAULT_INF_AGENT_DIST = {"mean": 0.0, "std": 1.0}
 
 # Optimization Hyperparameters for Coordinate Newton
 NUM_OPTIMIZATION_EPOCHS = 20 # Number of full passes over all parameters
@@ -118,7 +118,6 @@ def infer_parameters(outcomes, n_probs_for_inference, n_agents, inf_prob_dist, i
     def current_objective_fn_for_optimizer(params_vector):
         return negative_log_likelihood(params_vector, outcomes, n_probs_for_inference, n_agents, inf_prob_dist, inf_agent_dist)
 
-    print("Starting custom coordinate-wise Newton optimization...")
     final_params, std_errors = coordinate_newton_optimize(
         current_objective_fn_for_optimizer, 
         initial_params, 
@@ -128,7 +127,6 @@ def infer_parameters(outcomes, n_probs_for_inference, n_agents, inf_prob_dist, i
         OPTIMIZATION_LEARNING_RATE, 
         OPTIMIZATION_EPSILON
     )
-    print("Custom optimization finished.")
     
     prob_std_errs = std_errors[:n_probs_for_inference]
     agent_std_errs = std_errors[n_probs_for_inference:]
@@ -136,7 +134,147 @@ def infer_parameters(outcomes, n_probs_for_inference, n_agents, inf_prob_dist, i
     inferred_problem_difficulties = lax.dynamic_slice(final_params, (0,), (n_probs_for_inference,))
     inferred_agent_strengths = lax.dynamic_slice(final_params, (n_probs_for_inference,), (n_agents,))
     
+    # Normalize: set mean agent strength to 0 and adjust problem difficulties accordingly
+    mean_agent_strength = jnp.mean(inferred_agent_strengths)
+    inferred_agent_strengths -= mean_agent_strength
+    inferred_problem_difficulties -= mean_agent_strength
+    
     return inferred_problem_difficulties, inferred_agent_strengths, prob_std_errs, agent_std_errs
+
+def _print_console_rankings(agents, problems, inferred_agent_strengths, inferred_problem_diffs, agent_std_errors, prob_std_errors, agent_solve_counts, agent_attempt_counts, outcomes):
+    """Helper function to print rankings to the console."""
+    # Create a list of agent data for sorting and printing
+    agent_print_data = []
+    for agent_idx in range(len(agents)):
+        agent = agents[agent_idx]
+        num_solved = agent_solve_counts.get(agent, 0)
+        num_attempts = agent_attempt_counts.get(agent, 0)
+        solved_per_attempt = (num_solved / num_attempts) if num_attempts > 0 else 0.0
+        
+        agent_print_data.append({
+            "id": agent,
+            "strength": inferred_agent_strengths[agent_idx],
+            "std_error": agent_std_errors[agent_idx],
+            "num_solved": num_solved,
+            "num_attempts": num_attempts,
+            "solved_per_attempt": solved_per_attempt
+        })
+    
+    agents_with_solves_print = [agent_d for agent_d in agent_print_data if agent_d["num_solved"] > 0]
+    agents_with_solves_print.sort(key=lambda x: x["strength"], reverse=True)
+
+    print("\n--- Agent Rankings (Agents with >0 solves) ---")
+    header = f"{'Rank':>4} | {'ID':>4} | {'Strength':>12} | {'Solved':>6} | {'Attempts':>8} | {'Solve Rate':>10}"
+    print(header)
+    print("-" * len(header))
+    for rank, agent_d in enumerate(agents_with_solves_print):
+        se_str = f"{agent_d['std_error']:.2f}" if not (isinstance(agent_d['std_error'], float) and np.isnan(agent_d['std_error'])) else "N/A "
+        strength_str = f"{agent_d['strength']:.2f} ± {se_str}"
+        print(f"{rank+1:>4} | {agent_d['id']:>4} | {strength_str:>12} | {agent_d['num_solved']:>6} | {agent_d['num_attempts']:>8} | {agent_d['solved_per_attempt']:>10.3f}")
+
+    # Create a list of problem data for sorting and printing
+    problem_print_data = []
+    for problem_idx in range(len(problems)):
+        problem = problems[problem_idx]
+        solving_agent_indices = np.where(outcomes[problem_idx, :] == 1)[0]
+        solving_agents_str = ", ".join(agents[idx] for idx in solving_agent_indices)
+        problem_print_data.append({
+            "id": problem,
+            "difficulty": inferred_problem_diffs[problem_idx],
+            "std_error": prob_std_errors[problem_idx],
+            "solved_by": solving_agents_str
+        })
+
+    problem_print_data.sort(key=lambda x: x["difficulty"], reverse=True)
+    
+    print("\n--- Top/Bottom Problem Rankings (Problems with >0 solvers) --- ")
+    header_prob = f"{'Rank':>4} | {'ID':>6} | {'Difficulty':>14} | {'Solved by':<20}"
+    print(header_prob)
+    print("-" * len(header_prob))
+    for i, prob_data in enumerate(problem_print_data[:5]): # Top 5
+        se_str = f"{prob_data['std_error']:.2f}" if not (isinstance(prob_data['std_error'], float) and np.isnan(prob_data['std_error'])) else "N/A "
+        diff_str = f"{prob_data['difficulty']:.2f} ± {se_str}"
+        print(f"{i+1:>4} | {prob_data['id']:>6} | {diff_str:>14} | {prob_data['solved_by']:<20}")
+    if len(problem_print_data) > 10:
+        print("...")
+    for i, prob_data in enumerate(problem_print_data[-5:]): # Bottom 5
+        rank_display = len(problem_print_data) - 5 + i +1
+        se_str = f"{prob_data['std_error']:.2f}" if not (isinstance(prob_data['std_error'], float) and np.isnan(prob_data['std_error'])) else "N/A "
+        diff_str = f"{prob_data['difficulty']:.2f} ± {se_str}"
+        print(f"{rank_display:>4} | {prob_data['id']:>6} | {diff_str:>14} | {prob_data['solved_by']:<20}")
+
+
+def _write_json_output(output_file_path, agents, problems, inferred_agent_strengths, inferred_problem_diffs, agent_std_errors, prob_std_errors, agent_solve_counts, agent_attempt_counts):
+    """Helper function to write ratings to a JSON file."""
+    final_agent_data_for_json = []
+    for agent_idx in range(len(agents)):
+        agent = agents[agent_idx]
+        num_solved = agent_solve_counts.get(agent, 0)
+        num_attempts = agent_attempt_counts.get(agent, 0)
+        solved_per_attempt = (num_solved / num_attempts) if num_attempts > 0 else 0.0
+        final_agent_data_for_json.append({
+            "id": agent,
+            "strength": inferred_agent_strengths[agent_idx],
+            "std_error": agent_std_errors[agent_idx],
+            "num_solved": num_solved,
+            "num_attempts": num_attempts,
+            "solved_per_attempt": solved_per_attempt
+        })
+    
+    final_agents_with_solves_for_json = [agent_d for agent_d in final_agent_data_for_json if agent_d["num_solved"] > 0]
+    final_agents_with_solves_for_json.sort(key=lambda x: x["strength"], reverse=True)
+
+    agent_ratings_for_json = []
+    for rank, agent_d_json in enumerate(final_agents_with_solves_for_json):
+        agent_ratings_for_json.append({
+            "rank": rank + 1,
+            "id": agent_d_json['id'],
+            "strength": agent_d_json['strength'],
+            "std_error": agent_d_json['std_error'],
+            "num_solved": agent_d_json['num_solved'],
+            "num_attempts": agent_d_json['num_attempts'],
+            "solved_per_attempt": agent_d_json['solved_per_attempt']
+        })
+
+    # Create a list of problem data for JSON output
+    final_problem_data_for_json = []
+    for problem_idx in range(len(problems)):
+        problem = problems[problem_idx]
+        final_problem_data_for_json.append({
+            "id": problem,
+            "difficulty": inferred_problem_diffs[problem_idx],
+            "std_error": prob_std_errors[problem_idx]
+        })
+    final_problem_data_for_json.sort(key=lambda x: x["difficulty"], reverse=True)
+    
+    problem_ratings_for_json = []
+    for rank, prob_data_json in enumerate(final_problem_data_for_json):
+        problem_ratings_for_json.append({
+            "rank": rank + 1,
+            "id": prob_data_json['id'],
+            "difficulty": prob_data_json['difficulty'],
+            "std_error": prob_data_json['std_error']
+        })
+
+    output_data = {
+        "agents": agent_ratings_for_json, 
+        "problems": problem_ratings_for_json,
+        "inference_parameters_used": {
+            "INF_PROB_DIST": DEFAULT_INF_PROB_DIST, 
+            "INF_AGENT_DIST": DEFAULT_INF_AGENT_DIST, 
+            "optimizer_settings": {
+                "method": "coordinate_newton",
+                "epochs": NUM_OPTIMIZATION_EPOCHS,
+                "learning_rate": OPTIMIZATION_LEARNING_RATE,
+                "epsilon": OPTIMIZATION_EPSILON
+            }
+        }
+    }
+
+    print(f"\nWriting ratings to: {output_file_path}")
+    with open(output_file_path, 'w') as f:
+        json.dump(output_data, f, indent=2, cls=NumpyFloatEncoder)
+    print("Ratings successfully written.")
 
 def main_rate():
     parser = argparse.ArgumentParser(description="Rate agents and problems from simulation attempts JSON.")
@@ -163,7 +301,11 @@ def main_rate():
     outcomes, problems, agents = preprocess_attempts_to_matrix(attempts_list_from_file)
     print(f"Data preprocessed: {len(problems)} problems, {len(agents)} agents found in input.")
 
-    print("Starting Newton optimization...")
+    # Single inference pass
+    print(f"\n--- Starting Parameter Inference ---")
+    print(f"Using Problem Prior: Mean={DEFAULT_INF_PROB_DIST['mean']:.2f}, Std={DEFAULT_INF_PROB_DIST['std']:.2f}")
+    print(f"Using Agent Prior: Mean={DEFAULT_INF_AGENT_DIST['mean']:.2f}, Std={DEFAULT_INF_AGENT_DIST['std']:.2f}")
+
     inferred_problem_diffs, inferred_agent_strengths, prob_std_errors, agent_std_errors = infer_parameters(
         outcomes, 
         len(problems), 
@@ -171,115 +313,13 @@ def main_rate():
         DEFAULT_INF_PROB_DIST, 
         DEFAULT_INF_AGENT_DIST
     )
-    print("Inference complete.")
 
-    # Create a list of agent data for sorting and printing
-    agent_data = []
-    for agent_idx in range(len(agents)):
-        agent = agents[agent_idx]
-        num_solved = agent_solve_counts.get(agent, 0)
-        num_attempts = agent_attempt_counts.get(agent, 0)
-        solved_per_attempt = (num_solved / num_attempts) if num_attempts > 0 else 0.0
-        
-        agent_data.append({
-            "id": agent,
-            "strength": inferred_agent_strengths[agent_idx],
-            "std_error": agent_std_errors[agent_idx],
-            "num_solved": num_solved,
-            "num_attempts": num_attempts,
-            "solved_per_attempt": solved_per_attempt
-        })
-    
-    # Filter agents to include only those with num_solved > 0
-    agents_with_solves = [agent for agent in agent_data if agent["num_solved"] > 0]
 
-    # Sort filtered agents by inferred strength (descending) for printing and JSON ranking
-    agents_with_solves.sort(key=lambda x: x["strength"], reverse=True)
+    # --- Print final rankings to console ---
+    _print_console_rankings(agents, problems, inferred_agent_strengths, inferred_problem_diffs, agent_std_errors, prob_std_errors, agent_solve_counts, agent_attempt_counts, outcomes)
 
-    print("\n--- Agent Rankings (Agents with >0 solves) ---")
-    header = f"{'Rank':>4} | {'ID':>4} | {'Strength':>12} | {'Solved':>6} | {'Attempts':>8} | {'Solve Rate':>10}"
-    print(header)
-    print("-" * len(header))
-
-    agent_ratings_for_json = []
-    for rank, agent_data in enumerate(agents_with_solves):
-        se_str = f"{agent_data['std_error']:.2f}" if not (isinstance(agent_data['std_error'], float) and np.isnan(agent_data['std_error'])) else "N/A "
-        strength_str = f"{agent_data['strength']:.2f} ± {se_str}"
-        print(f"{rank+1:>4} | {agent_data['id']:>4} | {strength_str:>12} | {agent_data['num_solved']:>6} | {agent_data['num_attempts']:>8} | {agent_data['solved_per_attempt']:>10.3f}")
-        
-        agent_ratings_for_json.append({
-            "rank": rank + 1,
-            "id": agent_data['id'],
-            "strength": agent_data['strength'],
-            "std_error": agent_data['std_error'],
-            "num_solved": agent_data['num_solved'],
-            "num_attempts": agent_data['num_attempts'],
-            "solved_per_attempt": agent_data['solved_per_attempt']
-        })
-
-    problem_ratings_for_json = []
-    # Sort problems by inferred difficulty (descending)
-    problem_print_data = []
-    for problem_idx in range(len(problems)):
-        problem = problems[problem_idx]
-        
-        # Find agents who solved this specific problem using the original outcomes_matrix
-        solving_agent_indices = np.where(outcomes[problem_idx, :] == 1)[0]
-        solving_agents_str = ", ".join(agents[idx] for idx in solving_agent_indices)
-        problem_print_data.append({
-            "id": problem,
-            "difficulty": inferred_problem_diffs[problem_idx],
-            "std_error": prob_std_errors[problem_idx],
-            "solved_by": solving_agents_str
-        })
-
-    problem_print_data.sort(key=lambda x: x["difficulty"], reverse=True)
-    
-    # Minimal console print for problems, as it can be very long
-    print("\n--- Top/Bottom Inferred Problem Difficulties --- ")
-    header_prob = f"{'Rank':>4} | {'ID':>6} | {'Difficulty':>14} | {'Solved by':<20}"
-    print(header_prob)
-    print("-" * len(header_prob))
-    for i, prob_data in enumerate(problem_print_data[:5]): # Top 5
-        se_str = f"{prob_data['std_error']:.2f}" if not (isinstance(prob_data['std_error'], float) and np.isnan(prob_data['std_error'])) else "N/A "
-        diff_str = f"{prob_data['difficulty']:.2f} ± {se_str}"
-        print(f"{i+1:>4} | {prob_data['id']:>6} | {diff_str:>14} | {prob_data['solved_by']:<20}")
-    if len(problem_print_data) > 10:
-        print("...")
-    for i, prob_data in enumerate(problem_print_data[-5:]): # Bottom 5 (least difficult of solved)
-        rank_display = len(problem_print_data) - 5 + i +1
-        se_str = f"{prob_data['std_error']:.2f}" if not (isinstance(prob_data['std_error'], float) and np.isnan(prob_data['std_error'])) else "N/A "
-        diff_str = f"{prob_data['difficulty']:.2f} ± {se_str}"
-        print(f"{rank_display:>4} | {prob_data['id']:>6} | {diff_str:>14} | {prob_data['solved_by']:<20}")
-
-    # Prepare problem ratings for JSON
-    for rank, prob_data in enumerate(problem_print_data):
-        problem_ratings_for_json.append({
-            "rank": rank + 1,
-            "id": prob_data['id'],
-            "difficulty": prob_data['difficulty'],
-            "std_error": prob_data['std_error']
-        })
-
-    output_data = {
-        "agents": agent_ratings_for_json, 
-        "problems": problem_ratings_for_json,
-        "inference_parameters_used": {
-            "INF_PROB_DIST": DEFAULT_INF_PROB_DIST,
-            "INF_AGENT_DIST": DEFAULT_INF_AGENT_DIST,
-            "optimizer_settings": {
-                "method": "coordinate_newton",
-                "epochs": NUM_OPTIMIZATION_EPOCHS,
-                "learning_rate": OPTIMIZATION_LEARNING_RATE,
-                "epsilon": OPTIMIZATION_EPSILON
-            }
-        }
-    }
-
-    print(f"\nWriting ratings to: {args.output_file}")
-    with open(args.output_file, 'w') as f:
-        json.dump(output_data, f, indent=2, cls=NumpyFloatEncoder)
-    print("Ratings successfully written.")
+    # Prepare final JSON output using the single inference pass results
+    _write_json_output(args.output_file, agents, problems, inferred_agent_strengths, inferred_problem_diffs, agent_std_errors, prob_std_errors, agent_solve_counts, agent_attempt_counts)
 
 if __name__ == "__main__":
     main_rate() 
