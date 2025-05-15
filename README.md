@@ -20,7 +20,7 @@ such that
 
 > Probability of success = 1 / (1 + exp(d - s))
 
-It assumes that strengths and difficulties are normally distributed (with
+It assumes as prior that strengths and difficulties are normally distributed (with
 user-provided parameters), and that the strength of an agent is *constant*.
 
 Given the outcomes of a competition, it uses a
@@ -79,3 +79,56 @@ python rate.py simulation_attempts.json --output_file ratings.json
 ```
 This command will read `simulation_attempts.json`, perform the rating calculations, and save the results to `ratings.json`.
 
+
+## Example results
+
+This experiment is to inform choices in the [SorryDB
+project](https://github.com/SorryDB/SorryDB). Here is one run of the experiment:
+
+Simulation parameters:
+
+- 20 agents
+- 1000 problems ('sorries')
+- mean difficulty - mean strength = 15 (corresponding to a success rate of
+  3e-07)
+- std deviation of agent strength = 2.5
+- std deviation of problem difficulty = 5
+
+Outcome:
+
+- 20 problems were solved
+- 13 agents solved at least one problem
+
+Inferred agent ratings (for default priors):
+
+| Rank | ID  | Strength        | Solved | Attempts | Solve Rate |
+|------|-----|-----------------|--------|----------|------------|
+| 1    | A14 | 16.68 ± 0.70    | 5      | 324      | 0.015      |
+| 2    | A20 | 16.59 ± 0.97    | 2      | 348      | 0.006      |
+| 3    | A12 | 16.23 ± 0.52    | 12     | 878      | 0.014      |
+| 4    | A15 | 15.00 ± 0.60    | 6      | 754      | 0.008      |
+| 5    | A10 | 14.59 ± 0.69    | 5      | 589      | 0.008      |
+| 6    | A5  | 14.45 ± 0.84    | 2      | 461      | 0.004      |
+| 7    | A3  | 14.45 ± 1.08    | 1      | 216      | 0.005      |
+| 8    | A19 | 13.51 ± 0.81    | 2      | 563      | 0.004      |
+| 9    | A11 | 13.37 ± 1.08    | 1      | 385      | 0.003      |
+| 10   | A6  | 13.11 ± 0.93    | 2      | 688      | 0.003      |
+| 11   | A18 | 12.98 ± 1.44    | 1      | 230      | 0.004      |
+| 12   | A7  | 12.90 ± 0.92    | 2      | 660      | 0.003      |
+| 13   | A4  | 12.51 ± 1.29    | 1      | 650      | 0.002      |
+
+Top/Bottom inferred problem ratings:
+
+| Rank | ID   | Difficulty      | Solved by                              |
+|------|------|-----------------|----------------------------------------|
+| 1    | P722 | 17.20 ± 1.00    | A10                                    |
+| 2    | P571 | 17.20 ± 1.00    | A14                                    |
+| 3    | P539 | 16.95 ± 1.00    | A14                                    |
+| 4    | P916 | 16.80 ± 1.04    | A12                                    |
+| 5    | P159 | 16.69 ± 1.08    | A7                                     |
+| ...  | ...  | ...             | ...                                    |
+| 16   | P495 | 14.32 ± 0.88    | A15, A12, A6                           |
+| 17   | P183 | 13.99 ± 0.97    | A5, A12, A19                           |
+| 18   | P825 | 13.82 ± 1.02    | A15, A12, A10                          |
+| 19   | P628 | 13.19 ± 0.88    | A11, A12, A10, A19                     |
+| 20   | P352 | 10.75 ± 1.36    | A14, A15, A7, A12, A10, A18, A6, A4    |
