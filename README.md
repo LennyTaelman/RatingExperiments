@@ -83,7 +83,7 @@ This command will read `simulation_attempts.json`, perform the rating calculatio
 
 ## Example results
 
-This experiment is to inform choices in the [SorryDB
+This experimental repository is built to help inform choices in the [SorryDB
 project](https://github.com/SorryDB/SorryDB). Below is one run of the experiment
 with rather sparse data (weak signal).
 
