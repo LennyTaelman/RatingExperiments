@@ -3,7 +3,7 @@
 Given a collection of agents (of varying strengths) that attempt to solve a
 collection of problems (of varying difficulty), one can try to rank the quality
 of the agents. If agents experience downtime and don't attempt the exact same
-set of problems, one can use a Bayesean model to infer some ELO-type rating for
+set of problems, one can use a Bayesian model to infer some ELO-type rating for
 the agents (and problems).
 
 This project simulates this situation for experimentation with such rating
@@ -20,8 +20,9 @@ such that
 
 > Probability of success = 1 / (1 + exp(d - s))
 
-It assumes as prior that strengths and difficulties are normally distributed (with
-user-provided parameters), and that the strength of an agent is *constant*.
+It assumes (prior) that strengths and difficulties are normally distributed (with
+user-provided parameters), and that the strength of an agent is *constant*
+during the competition.
 
 Given the outcomes of a competition, it uses a
 numerical Newton scheme to find the maximum likelihood estimates of the
