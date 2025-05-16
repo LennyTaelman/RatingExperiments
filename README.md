@@ -14,20 +14,16 @@ model. It consists of two python scripts
 
 ## Rating model used
 
-The rating model used is a Bayesian variant on chess ELO rating. It expresses
-strength `s` of an agent and difficulty `d` of a problem on a numerical scale,
-such that
+The rating model used is a Bayesian variant on chess ELO rating. The underlying
+model is the Bradley--Terry model. It expresses strength `s` of an agent and
+difficulty `d` of a problem on a numerical scale, such that
 
-> Probability of success = 1 / (1 + exp(d - s))
+> Probability of agent solving the problem = 1 / (1 + exp(d - s))
 
-It assumes (prior) that strengths and difficulties are normally distributed (with
-user-provided parameters), and that the strength of an agent is *constant*
-during the competition.
-
-Given the outcomes of a competition, it uses a
-numerical Newton scheme to find the maximum likelihood estimates of the
-strengths of agents and difficulties of problems. In particular, this also gives
-uncertainty quantification of the computed ratings.
+Our rating assumes (prior) that strengths and difficulties are normally distributed (with
+user-provided parameters). Given the outcomes of a competition, one can
+numerically find maximum likelihood estimates and uncertainty quantification.
+This implementation uses a simple Newton approximation.
 
 Note: To convert `s` and `d` to regular chess ELO scale, multiply by 400/log(10) ≈ 173.7
 and add an arbitrary constant.
@@ -44,12 +40,16 @@ They determine the distribution of
 - the strengths of the agents
 - the amount of downtime of the agents
 
-To run the simulation and generate an output file (e.g., `simulation_attempts.json`):
-```bash
+To run the simulation and generate an output file (e.g.,
+`simulation_attempts.json`):
+
+```sh
 python simulate.py --output_file simulation_attempts.json
 ```
+
 This will create `simulation_attempts.json` which encodes a list of attempts
 formatted as:
+
 ```json
 [
   {
@@ -113,10 +113,10 @@ Maximum likelihood estimation excluding unsolved problems or agents with score
 
 - strengths and difficulties are ~ N(0,1)
 
-Inferred agent ratings:
+### Inferred agent ratings
 
 | Rank | ID   | Strength       | Solved | Attempts | Solve Rate |
-|------|------|----------------|--------|----------|------------|
+|:----:|:----:|:--------------:|:------:|:--------:|:----------:|
 | 1    | A12  | 1.07 ± 0.43    | 12     | 878      | 0.014      |
 | 2    | A14  | 1.04 ± 0.57    | 5      | 324      | 0.015      |
 | 3    | A20  | 0.87 ± 0.72    | 2      | 348      | 0.006      |
@@ -131,11 +131,10 @@ Inferred agent ratings:
 | 12   | A7   | -0.66 ± 0.57   | 2      | 660      | 0.003      |
 | 13   | A6   | -0.71 ± 0.56   | 2      | 688      | 0.003      |
 
-
-Top/Bottom inferred problem ratings:
+### Inferred problem ratings
 
 | Rank | ID    | Difficulty     | Solved by                              |
-|------|-------|----------------|----------------------------------------|
+|:----:|:-----:|:--------------:|----------------------------------------|
 | 1    | P722  | 1.52 ± 0.63    | A10                                    |
 | 2    | P539  | 1.48 ± 0.63    | A14                                    |
 | 3    | P571  | 1.40 ± 0.66    | A14                                    |
